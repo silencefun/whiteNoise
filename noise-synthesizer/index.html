@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Web Audio Noise Synthesizer — 8 Noise Colors</title>
+<meta name="description" content="Eight noise colors (white, pink, brown, grey, blue, green, purple, orange) synthesized in real time with the Web Audio API. No sample files, pure DSP.">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0b1020; --panel:rgba(18,24,44,.86); --border:rgba(148,163,184,.18);
+  --text:#e8edf9; --muted:#94a3b8; --accent:#38bdf8; --accent2:#818cf8;
+}
+body{
+  min-height:100vh; display:flex; align-items:center; justify-content:center;
+  padding:28px 18px; color:var(--text); line-height:1.55;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  background:
+    radial-gradient(1100px 620px at 12% -8%, rgba(56,189,248,.16), transparent 62%),
+    radial-gradient(900px 560px at 92% 6%, rgba(129,140,248,.16), transparent 60%),
+    var(--bg);
+}
+.wrap{width:min(920px,100%)}
+header{margin-bottom:18px}
+h1{font-size:1.5rem;font-weight:700;letter-spacing:-.01em}
+.sub{margin-top:6px;color:var(--muted);font-size:.9rem}
+.panel{
+  background:var(--panel); border:1px solid var(--border); border-radius:14px;
+  padding:18px; backdrop-filter:blur(14px); box-shadow:0 18px 46px rgba(2,6,23,.5);
+}
+.colors{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.colors button{
+  display:flex;align-items:center;gap:7px;cursor:pointer;
+  padding:8px 13px;border-radius:999px;font-size:.85rem;font-weight:600;
+  color:var(--text);background:rgba(148,163,184,.10);border:1px solid var(--border);
+  transition:.18s;
+}
+.colors button:hover{background:rgba(148,163,184,.2)}
+.colors button.on{background:rgba(56,189,248,.18);border-color:var(--accent);color:#e0f2fe}
+.dot{width:11px;height:11px;border-radius:50%;flex:none}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin-bottom:14px}
+#play{
+  cursor:pointer;padding:10px 24px;border-radius:9px;font-size:.92rem;font-weight:700;
+  color:#04121f;background:linear-gradient(135deg,var(--accent),var(--accent2));
+  border:none;min-width:104px;transition:.18s;
+}
+#play:hover{filter:brightness(1.08)}
+.vol{display:flex;align-items:center;gap:9px;font-size:.85rem;color:var(--muted)}
+#vol{width:150px;accent-color:var(--accent);cursor:pointer}
+.hint{font-size:.8rem;color:var(--muted)}
+canvas{
+  display:block;width:100%;height:auto;border-radius:10px;
+  border:1px solid var(--border);background:#070b18;
+}
+.legend{display:flex;justify-content:space-between;font-size:.72rem;color:var(--muted);margin-top:6px}
+@media (max-width:640px){
+  h1{font-size:1.25rem}
+  .colors button{padding:7px 11px;font-size:.8rem}
+  #vol{width:110px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Web Audio Noise Synthesizer</h1>
+    <p class="sub">Eight noise colors synthesized in real time &mdash; pure DSP, no sample files.</p>
+  </header>
+
+  <div class="panel">
+    <div class="colors" id="colors"></div>
+    <div class="bar">
+      <button id="play">Play</button>
+      <label class="vol">Volume
+        <input type="range" id="vol" min="0" max="1" step="0.01" value="0.32">
+      </label>
+      <span class="hint" id="hint">Pick a color and press Play</span>
+    </div>
+    <canvas id="spec" width="1200" height="250"></canvas>
+    <div class="legend"><span>20 Hz</span><span>200 Hz</span><span>2 kHz</span><span>20 kHz</span></div>
+  </div>
+</div>
+
+<script>
+/* ---------------------------------------------------------------------------
+   The core: one function that fills a stereo buffer with a chosen noise color.
+   Each branch is a different filter over the same white-noise source:
+     white   flat spectrum
+     pink    -3 dB per octave
+     brown   -6 dB per octave
+     green   +3 dB per octave
+     blue    high-frequency emphasis
+     purple  steeper high-frequency emphasis
+     grey    softened pink
+     orange  low-frequency emphasis
+--------------------------------------------------------------------------- */
+function generateNoise(ctx, type){
+  const sr = ctx.sampleRate, len = sr * 4;
+  const buf = ctx.createBuffer(2, len, sr);
+  const dL = buf.getChannelData(0), dR = buf.getChannelData(1);
+
+  function genCh(d){
+    if(type === 'white'){
+      let prev = 0;
+      for(let i = 0; i < len; i++){
+        const w = Math.random() * 2 - 1;
+        d[i] = prev * 0.3 + w * 0.7; prev = d[i]; d[i] *= 0.3;
+      }
+    }
+    else if(type === 'pink'){
+      let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0;
+      for(let i = 0; i < len; i++){
+        const w = Math.random() * 2 - 1;
+        b0 = 0.99886*b0 + w*0.0555179;
+        b1 = 0.99332*b1 + w*0.0750759;
+        b2 = 0.96900*b2 + w*0.1538520;
+        b3 = 0.86650*b3 + w*0.3104856;
+        b4 = 0.55000*b4 + w*0.5329522;
+        b5 = -0.7616*b5 - w*0.0168980;
+        d[i] = (b0+b1+b2+b3+b4+b5+b6 + w*0.5362) * 0.11;
+        b6 = w * 0.115926;
+      }
+    }
+    else if(type === 'brown'){
+      let last = 0;
+      for(let i = 0; i < len; i++){
+        const w = Math.random() * 2 - 1;
+        d[i] = (last + 0.02 * w) / 1.02; last = d[i]; d[i] *= 3.5;
+      }
+    }
+    else if(type === 'grey'){
+      let last = 0;
+      for(let i = 0; i < len; i++){
+        const w = Math.random() * 2 - 1;
+        d[i] = (last + 0.02 * w) / 1.02; last = d[i];
+        d[i] = d[i] * 2.5 + w * 0.3; d[i] *= 0.28;
+      }
+    }
+    else if(type === 'blue'){
+      let last = 0;
+      for(let i = 0; i < len; i++){
+        const w = Math.random() * 2 - 1;
+        d[i] = (last + w) / 2 + Math.random() * 2 - 1; last = d[i] - w; d[i] *= 0.15;
+      }
+    }
+    else if(type === 'green'){
+      let b0 = 0, b1 = 0, b2 = 0;
+      for(let i = 0; i < len; i++){
+        const w = Math.random() * 2 - 1;
+        b0 = 0.98*b0 + w*0.02; b1 = 0.95*b1 + w*0.05; b2 = 0.9*b2 + w*0.1;
+        d[i] = (b0 + b1 + b2 + w*0.3) * 0.15;
+      }
+    }
+    else if(type === 'purple'){
+      let last = 0;
+      for(let i = 0; i < len; i++){
+        const w = Math.random() * 2 - 1;
+        d[i] = last * 0.95 + w * 0.5; last = d[i]; d[i] *= 0.12;
+      }
+    }
+    else if(type === 'orange'){
+      let last = 0;
+      for(let i = 0; i < len; i++){
+        const w = Math.random() * 2 - 1;
+        d[i] = (last + 0.01 * w) / 1.01; last = d[i];
+        d[i] *= 1.2; d[i] += w * 0.05; d[i] *= 0.15;
+      }
+    }
+  }
+  genCh(dL); genCh(dR);
+  return buf;
+}
+
+/* --- colors + metadata --- */
+const COLORS = [
+  {id:'white',  label:'White',  sw:'#f8fafc'},
+  {id:'pink',   label:'Pink',   sw:'#f472b6'},
+  {id:'brown',  label:'Brown',  sw:'#b45309'},
+  {id:'grey',   label:'Grey',   sw:'#94a3b8'},
+  {id:'blue',   label:'Blue',   sw:'#38bdf8'},
+  {id:'green',  label:'Green',  sw:'#4ade80'},
+  {id:'purple', label:'Purple', sw:'#a78bfa'},
+  {id:'orange', label:'Orange', sw:'#fb923c'},
+];
+/* Slope labels describe what these recipes actually measure on the
+   analyser, not the textbook ideal - see the README table. */
+const SLOPE = {
+  white:'flat spectrum',
+  pink:'-3 dB per octave',
+  brown:'-6 dB per octave',
+  grey:'-2 dB per octave, soft pink',
+  blue:'near flat, slight downward tilt',
+  green:'low weighted, -2 dB per octave',
+  purple:'low weighted, -5 dB per octave',
+  orange:'-3 dB per octave, heavy low end'
+};
+
+/* --- audio graph: buffer source -> gain -> analyser -> destination --- */
+let ctx = null, gain = null, analyser = null, source = null, playing = false, current = 'white';
+
+const cv = document.getElementById('spec');
+const g = cv.getContext('2d');
+
+function buildButtons(){
+  const box = document.getElementById('colors');
+  COLORS.forEach(c => {
+    const b = document.createElement('button');
+    b.dataset.id = c.id;
+    b.innerHTML = '<span class="dot" style="background:' + c.sw + '"></span>' + c.label;
+    if(c.id === current) b.classList.add('on');
+    b.onclick = () => select(c.id);
+    box.appendChild(b);
+  });
+}
+
+function select(id){
+  current = id;
+  document.querySelectorAll('#colors button').forEach(b => b.classList.toggle('on', b.dataset.id === id));
+  const c = COLORS.find(x => x.id === id);
+  document.getElementById('hint').textContent = c.label + ' noise — ' + SLOPE[id];
+  if(playing){ stop(); play(); }
+}
+
+function ensureCtx(){
+  if(!ctx){
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    gain = ctx.createGain();
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 8192;
+    analyser.smoothingTimeConstant = 0.55;
+    analyser.minDecibels = -100;
+    analyser.maxDecibels = -20;
+    gain.connect(analyser);
+    analyser.connect(ctx.destination);
+  }
+  if(ctx.state === 'suspended') ctx.resume();
+}
+
+function play(){
+  ensureCtx();
+  gain.gain.value = parseFloat(document.getElementById('vol').value);
+  const buf = generateNoise(ctx, current);
+  source = ctx.createBufferSource();
+  source.buffer = buf; source.loop = true;
+  source.connect(gain);
+  source.start();
+  playing = true;
+  document.getElementById('play').textContent = 'Stop';
+  document.getElementById('hint').textContent =
+    COLORS.find(x => x.id === current).label + ' noise — ' + SLOPE[current];
+}
+
+function stop(){
+  if(source){ try{ source.stop(); }catch(e){} source.disconnect(); source = null; }
+  playing = false;
+  document.getElementById('play').textContent = 'Play';
+}
+
+document.getElementById('play').onclick = () => playing ? stop() : play();
+document.getElementById('vol').oninput = e => { if(gain) gain.gain.value = parseFloat(e.target.value); };
+
+/* --- spectrum rendering ---
+   The curve is not raw FFT bins: each point is the mean level of a 1/6-octave
+   band on a log frequency axis. That is exactly how a noise color is defined
+   acoustically, so white reads as a flat line, pink as -3 dB/oct, brown as
+   -6 dB/oct and green as +3 dB/oct. --- */
+const LO_DB = -110, HI_DB = -40;
+const NB = 120;                       /* number of log-spaced bands */
+const F0 = 20, F1 = 20000;
+const RATIO = Math.pow(F1 / F0, 1 / NB);   /* bandwidth of one band */
+let fdata = null, acc = null;
+
+function draw(){
+  const W = cv.width, H = cv.height;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = '#070b18'; g.fillRect(0, 0, W, H);
+
+  /* grid: -45 dB and -70 dB reference lines */
+  g.strokeStyle = 'rgba(148,163,184,.13)'; g.lineWidth = 1;
+  g.fillStyle = 'rgba(148,163,184,.55)';
+  g.font = '11px ui-monospace,Menlo,Consolas,monospace';
+  [-50, -80].forEach(db => {
+    const y = H - (db - LO_DB) / (HI_DB - LO_DB) * H * 0.92 - 2;
+    g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+    g.fillText(db + ' dB', 6, y - 4);
+  });
+
+  const nyq = ctx ? ctx.sampleRate / 2 : 22050;
+  const lgMin = Math.log10(F0), lgMax = Math.log10(F1);
+
+  if(analyser){
+    if(!fdata || fdata.length !== analyser.frequencyBinCount){
+      fdata = new Float32Array(analyser.frequencyBinCount);
+      acc = new Float32Array(NB);
+    }
+    analyser.getFloatFrequencyData(fdata);
+
+    const vals = new Float32Array(NB);
+    for(let i = 0; i < NB; i++){
+      const fa = F0 * Math.pow(RATIO, i), fb = fa * RATIO;
+      let b0 = Math.round(fa / nyq * fdata.length);
+      let b1 = Math.round(fb / nyq * fdata.length) - 1;
+      if(b0 < 0) b0 = 0;
+      if(b1 >= fdata.length) b1 = fdata.length - 1;
+      if(b1 < b0) b1 = b0;
+      let sum = 0, n = 0;
+      for(let b = b0; b <= b1; b++){
+        let v = fdata[b];
+        if(!isFinite(v)) v = LO_DB;
+        sum += v; n++;
+      }
+      vals[i] = n ? sum / n : LO_DB;
+    }
+    /* temporal average keeps the curve stable frame to frame */
+    for(let i = 0; i < NB; i++) acc[i] = acc[i] * 0.82 + vals[i] * 0.18;
+
+    const yOf = v => {
+      let d = v; if(d < LO_DB) d = LO_DB; if(d > HI_DB) d = HI_DB;
+      return H - (d - LO_DB) / (HI_DB - LO_DB) * H * 0.92 - 2;
+    };
+    const xOf = i => {
+      const fc = F0 * Math.pow(RATIO, i + 0.5);
+      return (Math.log10(fc) - lgMin) / (lgMax - lgMin) * W;
+    };
+
+    const grad = g.createLinearGradient(0, 0, W, 0);
+    grad.addColorStop(0, '#38bdf8'); grad.addColorStop(.55, '#818cf8'); grad.addColorStop(1, '#f472b6');
+    g.strokeStyle = grad; g.lineWidth = 2.4; g.lineJoin = 'round'; g.beginPath();
+    for(let i = 0; i < NB; i++){
+      const x = xOf(i), y = yOf(acc[i]);
+      if(i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+    g.lineTo(xOf(NB - 1), H); g.lineTo(xOf(0), H); g.closePath();
+    g.fillStyle = 'rgba(56,189,248,.10)'; g.fill();
+  }
+  requestAnimationFrame(draw);
+}
+
+buildButtons();
+select('white');
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
